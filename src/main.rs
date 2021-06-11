@@ -2,14 +2,14 @@ use std::{io::Write, path::PathBuf};
 
 use bindings::{
     Windows::Graphics::Imaging::BitmapDecoder,
-    Windows::Media::Ocr::OcrEngine,
+    Windows::Media::Ocr::*,
     Windows::Storage::{FileAccessMode, StorageFile},
 };
 
 use serde::Serialize;
 use structopt::StructOpt;
 
-/// 识别PNG文件并转换为文字
+/// 识别PNG,JPG文件并转换为文字
 #[derive(Debug, Clone, StructOpt)]
 struct Command {
     /// 源文件路径
@@ -17,7 +17,7 @@ struct Command {
 
     /// 输出文件路径
     #[structopt(short, long)]
-    dest: Option<PathBuf>,
+    output: Option<PathBuf>,
 
     /// 输出是否带位置信息
     #[structopt(short, long)]
@@ -41,7 +41,7 @@ fn main() -> windows::Result<()> {
 async fn main_async(args: Command) -> windows::Result<()> {
     let Command {
         source,
-        dest,
+        output,
         complete,
     } = args;
     let mut message = std::env::current_dir().unwrap();
@@ -54,9 +54,8 @@ async fn main_async(args: Command) -> windows::Result<()> {
     let bitmap = decode.GetSoftwareBitmapAsync()?.await?;
     let engine = OcrEngine::TryCreateFromUserProfileLanguages()?;
     let result = engine.RecognizeAsync(bitmap)?.await?;
-    dbg!(&result);
 
-    let dest = dest.unwrap_or_else(|| {
+    let dest = output.unwrap_or_else(|| {
         let mut p: PathBuf = source.clone();
         if complete {
             p.set_extension(".json");
@@ -70,10 +69,10 @@ async fn main_async(args: Command) -> windows::Result<()> {
         let mut complete_data = vec![];
         for line in result.Lines().unwrap() {
             let mut worlds = vec![];
-            for word in line.Words.unwrap() {
-                let rect = word.BoundingRect.unwrap();
+            for word in line.Words().unwrap() {
+                let rect = word.BoundingRect().unwrap();
                 worlds.push(Word {
-                    text: word.text(),
+                    text: word.Text().unwrap().to_string(),
                     x: rect.X,
                     y: rect.Y,
                     width: rect.Width,
@@ -82,10 +81,14 @@ async fn main_async(args: Command) -> windows::Result<()> {
             }
             complete_data.push(worlds)
         }
-        serde_json::to_string_pretty(&complete_data).unwrap();
-        String::new()
+        serde_json::to_string_pretty(&complete_data).unwrap()
     } else {
-        result.Text().unwrap().to_string()
+        let mut content = String::new();
+        for line in result.Lines().unwrap() {
+            content.push_str(&line.Text().unwrap().to_string_lossy().trim());
+            content.push('\n');
+        }
+        content
     };
     file.write_all(content.as_bytes()).unwrap();
     Ok(())
